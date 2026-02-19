@@ -703,6 +703,13 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   )
 }
 
+/** Check if text looks like a file path (contains / and has a file extension) */
+const FILE_PATH_RE = /^\.{0,2}\/.*\.\w+$|^[a-zA-Z]:\\.*\.\w+$|^\w[\w.-]*\/.*\.\w+$/
+
+function isFilePath(text: string): boolean {
+  return FILE_PATH_RE.test(text.trim())
+}
+
 PART_MAPPING["text"] = function TextPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
@@ -719,10 +726,22 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleCodeClick = (e: MouseEvent) => {
+    if (!data.openFile) return
+    const target = e.target as HTMLElement
+    const code = target.closest("code")
+    if (!code || code.closest("pre")) return
+    const text = code.textContent?.trim()
+    if (!text || !isFilePath(text)) return
+    e.preventDefault()
+    e.stopPropagation()
+    data.openFile(text)
+  }
+
   return (
     <Show when={throttledText()}>
-      <div data-component="text-part">
-        <div data-slot="text-part-body">
+      <div data-component="text-part" data-has-open-file={!!data.openFile || undefined}>
+        <div data-slot="text-part-body" onClick={handleCodeClick}>
           <Markdown text={throttledText()} cacheKey={part.id} />
           <div data-slot="text-part-copy-wrapper">
             <Tooltip
