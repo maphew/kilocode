@@ -173,7 +173,6 @@ export function getSessionToolParts(store: ReturnType<typeof useData>["store"], 
   return parts
 }
 
-import type { OpenFileFn } from "../context/data"
 import type { IconProps } from "./icon"
 
 export type ToolInfo = {
@@ -533,47 +532,6 @@ export const ToolRegistry = {
   render: getTool,
 }
 
-/** Check if text looks like a file path (contains / and has a file extension) */
-const FILE_PATH_RE = /^\.{0,2}\/.*\.\w+$|^[a-zA-Z]:\\.*\.\w+$|^\w[\w.-]*\/.*\.\w+$/
-
-function isFilePath(text: string): boolean {
-  return FILE_PATH_RE.test(text.trim())
-}
-
-/**
- * Renders tool output text with file paths as clickable elements.
- * Lines that look like file paths become clickable to open the file in the editor.
- */
-function ClickableFileOutput(props: { text: string; openFile?: OpenFileFn; directory?: string }) {
-  const lines = createMemo(() => props.text.split("\n").filter((l) => l.trim()))
-  const hasClickable = () => !!props.openFile
-
-  return (
-    <div data-component="clickable-file-output">
-      <For each={lines()}>
-        {(line) => {
-          const trimmed = line.trim()
-          const displayPath = props.directory ? relativizeProjectPaths(trimmed, props.directory) : trimmed
-          return (
-            <Show
-              when={hasClickable() && isFilePath(trimmed)}
-              fallback={<div data-slot="file-output-line">{displayPath}</div>}
-            >
-              <div
-                data-slot="file-output-line"
-                class="clickable"
-                onClick={() => props.openFile!(trimmed)}
-              >
-                {displayPath}
-              </div>
-            </Show>
-          )
-        }}
-      </For>
-    </div>
-  )
-}
-
 PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
@@ -724,22 +682,10 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleCodeClick = (e: MouseEvent) => {
-    if (!data.openFile) return
-    const target = e.target as HTMLElement
-    const code = target.closest("code")
-    if (!code || code.closest("pre")) return
-    const text = code.textContent?.trim()
-    if (!text || !isFilePath(text)) return
-    e.preventDefault()
-    e.stopPropagation()
-    data.openFile(text)
-  }
-
   return (
     <Show when={throttledText()}>
-      <div data-component="text-part" data-has-open-file={!!data.openFile || undefined}>
-        <div data-slot="text-part-body" onClick={handleCodeClick}>
+      <div data-component="text-part">
+        <div data-slot="text-part-body">
           <Markdown text={throttledText()} cacheKey={part.id} />
           <div data-slot="text-part-copy-wrapper">
             <Tooltip
@@ -795,9 +741,6 @@ ToolRegistry.register({
       if (!value || !Array.isArray(value)) return []
       return value.filter((p): p is string => typeof p === "string")
     })
-    const openFile = () => {
-      if (props.input.filePath && data.openFile) data.openFile(props.input.filePath)
-    }
     return (
       <>
         <BasicTool
@@ -808,21 +751,12 @@ ToolRegistry.register({
             subtitle: props.input.filePath ? getFilename(props.input.filePath) : "",
             args,
           }}
-          onSubtitleClick={props.input.filePath ? openFile : undefined}
         />
         <For each={loaded()}>
           {(filepath) => (
             <div data-component="tool-loaded-file">
               <Icon name="enter" size="small" />
-              <span
-                classList={{ clickable: !!data.openFile }}
-                onClick={(e) => {
-                  if (data.openFile) {
-                    e.stopPropagation()
-                    data.openFile(filepath)
-                  }
-                }}
-              >
+              <span>
                 {i18n.t("ui.tool.loaded")} {relativizeProjectPaths(filepath, data.directory)}
               </span>
             </div>
@@ -836,7 +770,6 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "list",
   render(props) {
-    const data = useData()
     const i18n = useI18n()
     return (
       <BasicTool
@@ -847,7 +780,7 @@ ToolRegistry.register({
         <Show when={props.output}>
           {(output) => (
             <div data-component="tool-output" data-scrollable>
-              <ClickableFileOutput text={output()} openFile={data.openFile} directory={data.directory} />
+              <Markdown text={output()} />
             </div>
           )}
         </Show>
@@ -859,7 +792,6 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "glob",
   render(props) {
-    const data = useData()
     const i18n = useI18n()
     return (
       <BasicTool
@@ -874,7 +806,7 @@ ToolRegistry.register({
         <Show when={props.output}>
           {(output) => (
             <div data-component="tool-output" data-scrollable>
-              <ClickableFileOutput text={output()} openFile={data.openFile} directory={data.directory} />
+              <Markdown text={output()} />
             </div>
           )}
         </Show>
@@ -886,7 +818,6 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "grep",
   render(props) {
-    const data = useData()
     const i18n = useI18n()
     const args: string[] = []
     if (props.input.pattern) args.push("pattern=" + props.input.pattern)
@@ -904,7 +835,7 @@ ToolRegistry.register({
         <Show when={props.output}>
           {(output) => (
             <div data-component="tool-output" data-scrollable>
-              <ClickableFileOutput text={output()} openFile={data.openFile} directory={data.directory} />
+              <Markdown text={output()} />
             </div>
           )}
         </Show>
@@ -1175,15 +1106,10 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "edit",
   render(props) {
-    const data = useData()
     const i18n = useI18n()
     const diffComponent = useDiffComponent()
     const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
     const filename = () => getFilename(props.input.filePath ?? "")
-    const openFile = (e: MouseEvent) => {
-      e.stopPropagation()
-      if (props.input.filePath && data.openFile) data.openFile(props.input.filePath)
-    }
     return (
       <BasicTool
         {...props}
@@ -1193,13 +1119,7 @@ ToolRegistry.register({
             <div data-slot="message-part-title-area">
               <div data-slot="message-part-title">
                 <span data-slot="message-part-title-text">{i18n.t("ui.messagePart.title.edit")}</span>
-                <span
-                  data-slot="message-part-title-filename"
-                  classList={{ clickable: !!data.openFile && !!props.input.filePath }}
-                  onClick={data.openFile && props.input.filePath ? openFile : undefined}
-                >
-                  {filename()}
-                </span>
+                <span data-slot="message-part-title-filename">{filename()}</span>
               </div>
               <Show when={props.input.filePath?.includes("/")}>
                 <div data-slot="message-part-path">
@@ -1239,15 +1159,10 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "write",
   render(props) {
-    const data = useData()
     const i18n = useI18n()
     const codeComponent = useCodeComponent()
     const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
     const filename = () => getFilename(props.input.filePath ?? "")
-    const openFile = (e: MouseEvent) => {
-      e.stopPropagation()
-      if (props.input.filePath && data.openFile) data.openFile(props.input.filePath)
-    }
     return (
       <BasicTool
         {...props}
@@ -1257,13 +1172,7 @@ ToolRegistry.register({
             <div data-slot="message-part-title-area">
               <div data-slot="message-part-title">
                 <span data-slot="message-part-title-text">{i18n.t("ui.messagePart.title.write")}</span>
-                <span
-                  data-slot="message-part-title-filename"
-                  classList={{ clickable: !!data.openFile && !!props.input.filePath }}
-                  onClick={data.openFile && props.input.filePath ? openFile : undefined}
-                >
-                  {filename()}
-                </span>
+                <span data-slot="message-part-title-filename">{filename()}</span>
               </div>
               <Show when={props.input.filePath?.includes("/")}>
                 <div data-slot="message-part-path">

@@ -52,7 +52,9 @@ export type SessionHrefFn = (sessionID: string) => string
 
 export type SyncSessionFn = (sessionID: string) => void | Promise<void>
 
+// kilocode_change start
 export type OpenFileFn = (path: string) => void
+// kilocode_change end
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
@@ -65,7 +67,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     onNavigateToSession?: NavigateToSessionFn
     onSessionHref?: SessionHrefFn
     onSyncSession?: SyncSessionFn
-    onOpenFile?: OpenFileFn
+    onOpenFile?: OpenFileFn // kilocode_change
   }) => {
     return {
       get store() {
@@ -80,7 +82,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       navigateToSession: props.onNavigateToSession,
       sessionHref: props.onSessionHref,
       syncSession: props.onSyncSession,
-      openFile: props.onOpenFile,
+      openFile: props.onOpenFile, // kilocode_change
     }
   },
 })
