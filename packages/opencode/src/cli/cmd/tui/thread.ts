@@ -136,7 +136,15 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      // kilocode_change start - session-scoped TUI auto-approve
+      .option("auto-approve", {
+        type: "boolean",
+        alias: ["yolo"],
+        describe: "auto-approve permission prompts in the interactive session (dangerous!)",
+        default: false,
       }),
+  // kilocode_change end
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
     // (Important when running under `bun run` wrappers on Windows.)
@@ -371,6 +379,7 @@ export const TuiThreadCommand = cmd({
             model: args.model,
             prompt,
             fork: args.fork,
+            autoApprove: args["auto-approve"], // kilocode_change
           },
         })
       } finally {

@@ -3,6 +3,7 @@ import { createSimpleContext } from "./helper"
 export interface Args {
   model?: string
   agent?: string
+  autoApprove?: boolean // kilocode_change
   prompt?: string
   continue?: boolean
   sessionID?: string
