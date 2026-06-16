@@ -136,7 +136,7 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
-      })
+      }) // kilocode_change
       // kilocode_change start - session-scoped TUI auto-approve
       .option("auto-approve", {
         type: "boolean",
