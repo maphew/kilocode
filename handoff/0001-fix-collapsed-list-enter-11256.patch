@@ -1,0 +1,232 @@
+From af17e7770a23c80dad343a996d7cc489ba473620 Mon Sep 17 00:00:00 2001
+From: maphew <maphew@kilocode.dev>
+Date: Fri, 4 Sep 2026 05:17:34 +0000
+Subject: [PATCH] fix(text editor): keep collapsed list items sane on Enter
+ (#11256)
+
+Pressing Enter at the end of a collapsed list item inserted the new
+empty item between the parent and its hidden children, so the children
+re-nested under the new line instead of staying under the parent. The
+post-fixer now detects that Enter-driven split (an empty freshly-inserted
+block sitting in front of a collapsed ancestor's hidden run) and moves
+the new block to after the whole nested run.
+
+Collapsing a parent while the caret is inside a now-hidden child left
+the model caret there too, so the next Enter edited invisible content
+even though the visual caret sat on the parent line. toggleCollapsed
+now moves the caret to the end of the parent's own content in that
+case.
+
+Tests cover the to-do repro, a two-level hidden subtree, and the
+in-child caret move.
+---
+ .../plugins/collapsible_list_items.spec.ts    | 73 +++++++++++++++++-
+ .../src/plugins/collapsible_list_items.ts     | 76 +++++++++++++++++++
+ 2 files changed, 148 insertions(+), 1 deletion(-)
+
+diff --git a/packages/ckeditor5/src/plugins/collapsible_list_items.spec.ts b/packages/ckeditor5/src/plugins/collapsible_list_items.spec.ts
+index 6c5d4a9b5..f483bd58a 100644
+--- a/packages/ckeditor5/src/plugins/collapsible_list_items.spec.ts
++++ b/packages/ckeditor5/src/plugins/collapsible_list_items.spec.ts
+@@ -1,4 +1,4 @@
+-import { _setModelData as setModelData, ClassicEditor, FindAndReplace, FindAndReplaceEditing, keyCodes, List, Paragraph, TodoList, Typing, Undo, type ModelElement } from "ckeditor5";
++import { _setModelData as setModelData, ClassicEditor, Enter, FindAndReplace, FindAndReplaceEditing, keyCodes, List, Paragraph, TodoList, Typing, Undo, type ModelElement } from "ckeditor5";
+ import { beforeEach, describe, expect, it } from "vitest";
+ 
+ import { createTestEditor, getEditorElement } from "../../test/editor-kit.js";
+@@ -120,6 +120,19 @@ describe("CollapsibleListItems", () => {
+         expect(editor.getData()).not.toContain("data-trilium-collapsed");
+     });
+ 
++    it("moves the caret to the parent line when collapse hides the selection (#11256)", () => {
++        // The second symptom of #11256: the caret is in a nested child, the user clicks the
++        // gutter to collapse the parent, the visual caret moves onto the parent line — but
++        // the model caret stays inside the hidden child, so a subsequent Enter edits invisible
++        // content. Collapse now moves the caret to the end of the parent's own line.
++        setSelectionIn(editor, 1); // inside the first hidden-by-collapse child
++
++        editor.execute("toggleListCollapse");
++
++        expect(getBlock(editor, 0).getAttribute(LIST_COLLAPSED_ATTRIBUTE)).toBe(true);
++        expect(editor.model.document.selection.getFirstPosition()?.parent).toBe(getBlock(editor, 0));
++    });
++
+     it("expands automatically when an item is indented under a collapsed parent", () => {
+         editor.execute("toggleListCollapse");
+         setSelectionIn(editor, 3); // "Sibling", still visible at indent 0
+@@ -531,6 +544,64 @@ describe("CollapsibleListItems", () => {
+             expect(findEditor.model.document.selection.getFirstPosition()?.parent).toBe(getBlock(findEditor, 0));
+         });
+     });
++
++    describe("Enter on a collapsed item (#11256)", () => {
++        // The Enter command lives in the Enter feature; the rest of the suite uses a slimmer
++        // build without it.
++        let enterEditor: ClassicEditor;
++
++        beforeEach(async () => {
++            enterEditor = await createTestEditor([CollapsibleListItems, Enter, List, Paragraph, TodoList, Typing]);
++        });
++
++        it("moves the new sibling past the hidden children so the parent keeps its subtree", () => {
++            // The original repro: collapsing "todo1" with hidden "a" and "b", then Enter at the
++            // end of "todo1" used to insert the new empty line between the parent and its
++            // children, re-nesting the children under the new line. The fix moves the new line
++            // to after the hidden run instead.
++            setModelData(enterEditor.model,
++                '<paragraph listIndent="0" listItemId="t-a" listType="todo">todo1[]</paragraph>' +
++                '<paragraph listIndent="1" listItemId="t-b" listType="todo">a</paragraph>' +
++                '<paragraph listIndent="1" listItemId="t-c" listType="todo">b</paragraph>');
++
++            enterEditor.execute("toggleListCollapse");
++            // Caret is already at the end of "todo1"; Enter splits it.
++            enterEditor.execute("enter");
++
++            // Parent is still collapsed, still at indent 0, and still owns the nested children.
++            expect(getBlock(enterEditor, 0).getAttribute(LIST_COLLAPSED_ATTRIBUTE)).toBe(true);
++            expect(getBlock(enterEditor, 0).getAttribute("listIndent")).toBe(0);
++            expect(getBlock(enterEditor, 1).getAttribute("listIndent")).toBe(1);
++            expect(getBlock(enterEditor, 1).getAttribute("listItemId")).toBe("t-b");
++            expect(getBlock(enterEditor, 2).getAttribute("listIndent")).toBe(1);
++            expect(getBlock(enterEditor, 2).getAttribute("listItemId")).toBe("t-c");
++            // The new sibling sits after the nested run, not in front of it.
++            expect(getBlock(enterEditor, 3).getAttribute("listIndent")).toBe(0);
++            expect(getBlock(enterEditor, 3).getAttribute("listItemId")).not.toBe("t-a");
++            expect(getBlock(enterEditor, 3).isEmpty).toBe(true);
++        });
++
++        it("moves the new sibling past a multi-level hidden subtree", () => {
++            // A two-level hidden subtree: the Enter-split sibling must land after the deepest
++            // visible child, not after the parent alone.
++            setModelData(enterEditor.model,
++                '<paragraph listIndent="0" listItemId="d-a" listType="bulleted">parent[]</paragraph>' +
++                '<paragraph listIndent="1" listItemId="d-b" listType="bulleted">mid</paragraph>' +
++                '<paragraph listIndent="2" listItemId="d-c" listType="bulleted">leaf</paragraph>');
++
++            enterEditor.execute("toggleListCollapse");
++            enterEditor.execute("enter");
++
++            // The deepest sibling comes right before the new line.
++            expect(getBlock(enterEditor, 0).getAttribute("listItemId")).toBe("d-a");
++            expect(getBlock(enterEditor, 0).getAttribute(LIST_COLLAPSED_ATTRIBUTE)).toBe(true);
++            expect(getBlock(enterEditor, 1).getAttribute("listIndent")).toBe(1);
++            expect(getBlock(enterEditor, 2).getAttribute("listIndent")).toBe(2);
++            // The new empty sibling is at indent 0, after the whole hidden run.
++            expect(getBlock(enterEditor, 3).getAttribute("listIndent")).toBe(0);
++            expect(getBlock(enterEditor, 3).isEmpty).toBe(true);
++        });
++    });
+ });
+ 
+ function getBlock(editor: ClassicEditor, index: number): ModelElement {
+diff --git a/packages/ckeditor5/src/plugins/collapsible_list_items.ts b/packages/ckeditor5/src/plugins/collapsible_list_items.ts
+index a8b935e9d..1f36a94d4 100644
+--- a/packages/ckeditor5/src/plugins/collapsible_list_items.ts
++++ b/packages/ckeditor5/src/plugins/collapsible_list_items.ts
+@@ -325,6 +325,17 @@ export default class CollapsibleListItems extends Plugin {
+                     writer.removeAttribute(LIST_COLLAPSED_ATTRIBUTE, block);
+                     changed = true;
+                 }
++                // Pressing Enter at the end of a collapsed item inserts the new empty item
++                // directly after it — that is, in front of the hidden children. The children
++                // would re-nest under the new item and leave the collapsed parent, so move the
++                // new item to after the whole hidden subtree instead. Detected only on freshly
++                // inserted blocks (the insertedNodes set) so a later paste or programmatic
++                // insert of the same shape is left alone.
++                if (isEnterSplitBeforeHiddenChildren(block, insertedNodes)) {
++                    writer.removeAttribute(LIST_COLLAPSED_ATTRIBUTE, block);
++                    moveBlockAfterNestedRun(writer, block);
++                    changed = true;
++                }
+             }
+ 
+             return changed;
+@@ -398,6 +409,15 @@ function getArrowBlockAtPointer(editor: Editor, data: ViewDocumentDomEventData<M
+ function toggleCollapsed(editor: Editor, block: ModelElement): void {
+     const collapse = !block.getAttribute(LIST_COLLAPSED_ATTRIBUTE);
+ 
++    // Collapsing hides the nested blocks. If the caret is inside one of them, typing and Enter
++    // would edit invisible content (the browser draws the caret on the visible parent line).
++    // Move the caret to the end of the item's own content so the next input stays visible.
++    const selectionBlock = editor.model.document.selection.getFirstPosition()?.parent;
++    const hidesCaret = collapse
++        && !!selectionBlock
++        && selectionBlock.is("element")
++        && getNestedBlocks(block).includes(selectionBlock);
++
+     editor.model.change((writer) => {
+         for (const itemBlock of getItemBlocks(block)) {
+             if (collapse) {
+@@ -406,6 +426,14 @@ function toggleCollapsed(editor: Editor, block: ModelElement): void {
+                 writer.removeAttribute(LIST_COLLAPSED_ATTRIBUTE, itemBlock);
+             }
+         }
++
++        if (hidesCaret) {
++            const ownBlocks = getItemBlocks(block);
++            const lastOwnBlock = ownBlocks.at(-1);
++            if (lastOwnBlock) {
++                writer.setSelection(writer.createPositionAt(lastOwnBlock, "end"));
++            }
++        }
+     });
+ }
+ 
+@@ -470,6 +498,54 @@ function hasNestedItems(block: ModelElement): boolean {
+     return false;
+ }
+ 
++/**
++ * The consecutive list blocks nested under `block` — everything the collapsed state hides:
++ * every following sibling with a deeper indent, down to the next block at the same or a
++ * shallower indent.
++ */
++function getNestedBlocks(block: ModelElement): ModelElement[] {
++    const nested: ModelElement[] = [];
++    const indent = getIndent(block);
++    for (let sibling = block.nextSibling; isListBlock(sibling) && getIndent(sibling) > indent; sibling = sibling.nextSibling) {
++        nested.push(sibling);
++    }
++    return nested;
++}
++
++/**
++ * True for the empty list item that an Enter split inserts directly after a collapsed item whose
++ * hidden children still follow it. We deliberately accept only freshly-inserted blocks so a
++ * programmatic or paste-driven insert of the same shape is left alone.
++ */
++function isEnterSplitBeforeHiddenChildren(block: ModelElement, insertedNodes: ReadonlySet<ModelNode>): boolean {
++    if (!insertedNodes.has(block)) {
++        return false;
++    }
++    const prev = block.previousSibling;
++    return block.isEmpty
++        && isListBlock(prev)
++        && prev.getAttribute(LIST_COLLAPSED_ATTRIBUTE) === true
++        && getIndent(prev) === getIndent(block)
++        && hasNestedItems(prev);
++}
++
++/**
++ * Moves `block` to after the deepest run of blocks nested under its collapsed parent — the
++ * hidden children it was inserted in front of. The parent then keeps its children and the new
++ * item ends up below the whole folded subtree, which is where the caret landed.
++ */
++function moveBlockAfterNestedRun(writer: ModelWriter, block: ModelElement): void {
++    const indent = getIndent(block);
++    let lastNested = block;
++    for (let sibling = block.nextSibling; isListBlock(sibling) && getIndent(sibling) > indent; sibling = sibling.nextSibling) {
++        lastNested = sibling;
++    }
++    if (lastNested === block) {
++        return;
++    }
++    writer.move(writer.createRangeOn(block), writer.createPositionAfter(lastNested));
++}
++
+ /** All consecutive blocks belonging to the same (possibly multi-block) list item. */
+ function getItemBlocks(block: ModelElement): ModelElement[] {
+     const itemId = block.getAttribute("listItemId");
+-- 
+2.55.0
+
